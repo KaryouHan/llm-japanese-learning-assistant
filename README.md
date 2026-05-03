@@ -1,56 +1,28 @@
 # LLM Japanese Learning Assistant
 
-An LLM-powered assistant for Japanese learners. It explains grammar, vocabulary, nuance, and example usage, with difficulty-aware output for JLPT-style learning.
+An LLM-powered Japanese learning assistant that explains Japanese sentences with grammar notes, vocabulary, nuance, examples, and practice questions.
 
-This project is designed as an LLM Engineer portfolio project. It demonstrates prompt design, structured LLM output, API integration, frontend/backend separation, and a roadmap toward RAG with Japanese learning materials.
+The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode without an API key, or connect to any OpenAI-compatible model API such as DeepSeek.
 
 ## Features
 
-- Explain Japanese sentences in English
-- Break down grammar points, vocabulary, and nuance
-- Generate learner-friendly example sentences
-- Create short practice questions
-- Support JLPT level selection from N5 to N1
-- Run with a mock LLM response by default
-- Switch to a real model API through environment variables
+- Analyze Japanese sentences by JLPT level
+- Explain grammar patterns, vocabulary, and nuance
+- Generate example sentences and practice questions
+- Support focus modes: general, grammar, vocabulary, nuance, and exam
+- Use mock mode for local UI testing
+- Connect to DeepSeek or another OpenAI-compatible chat API
 
-## Tech Stack
+## Stack
 
-- Backend: Python, FastAPI, Pydantic
+- Backend: Python, FastAPI, Pydantic, httpx
 - Frontend: Vue 3, TypeScript, Vite
-- AI: LLM API integration, prompt engineering, structured JSON output
-- Planned RAG: PDF ingestion, chunking, embeddings, vector search, source citations
-- DevOps: Docker, docker compose
-
-## Project Structure
-
-```text
-llm-japanese-learning-assistant/
-  backend/
-    app/
-      main.py
-      schemas.py
-      services/
-        llm_service.py
-        prompt_builder.py
-    requirements.txt
-    .env.example
-  frontend/
-    src/
-      App.vue
-      main.ts
-      styles.css
-    package.json
-    index.html
-    vite.config.ts
-    tsconfig.json
-  docker-compose.yml
-  README.md
-```
+- Model API: OpenAI-compatible chat completions
+- DevOps: Docker Compose
 
 ## Quick Start
 
-### Backend
+Clone the repository and start the backend:
 
 ```bash
 cd backend
@@ -61,19 +33,7 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-The backend will run at:
-
-```text
-http://localhost:8000
-```
-
-Health check:
-
-```text
-http://localhost:8000/health
-```
-
-### Frontend
+Start the frontend in another terminal:
 
 ```bash
 cd frontend
@@ -81,55 +41,47 @@ npm install
 npm run dev
 ```
 
-The frontend will run at:
+Open:
 
 ```text
 http://localhost:5173
 ```
 
-## API Example
-
-```bash
-curl -X POST http://localhost:8000/api/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sentence": "昨日、友達に日本語を教えてもらいました。",
-    "jlpt_level": "N4",
-    "focus": "grammar"
-  }'
-```
-
-## Model API
-
-By default, the backend returns a deterministic mock response so the project can run without an API key.
-
-To connect a real model provider, configure:
+Backend health check:
 
 ```text
-LLM_PROVIDER=openai_compatible
-LLM_API_KEY=your_api_key_here
+http://localhost:8000/health
+```
+
+## Configuration
+
+Create `backend/.env` from `backend/.env.example`.
+
+### Mock Mode
+
+Use mock mode when you only want to test the UI and API flow:
+
+```env
+LLM_PROVIDER=mock
+LLM_API_KEY=
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4.1-mini
 ```
 
-The code is intentionally provider-light: any OpenAI-compatible chat completions endpoint can be wired in.
-
 ### DeepSeek
 
-DeepSeek provides an OpenAI-compatible API, so it can be used without changing the backend code.
+Use DeepSeek with the OpenAI-compatible endpoint:
 
-```text
+```env
 LLM_PROVIDER=openai_compatible
 LLM_API_KEY=your_deepseek_api_key_here
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
 ```
 
-For compatibility, `https://api.deepseek.com/v1` can also be used as the base URL. The `v1` path is API compatibility naming, not the model version.
+For stronger reasoning:
 
-For a stronger reasoning model, use:
-
-```text
+```env
 LLM_PROVIDER=openai_compatible
 LLM_API_KEY=your_deepseek_api_key_here
 LLM_BASE_URL=https://api.deepseek.com
@@ -138,24 +90,75 @@ LLM_THINKING_TYPE=enabled
 LLM_REASONING_EFFORT=high
 ```
 
-## RAG Roadmap
+Do not commit `backend/.env`. It is ignored by Git.
 
-Future versions will add retrieval over Japanese learning resources:
+## API
 
-- Upload JLPT grammar notes or exam preparation PDFs
-- Extract and chunk Japanese text
-- Build embeddings and vector indexes
-- Retrieve grammar explanations and example sentences
-- Return answers with source citations
-- Evaluate retrieval quality and hallucination rate
+Analyze a Japanese sentence:
 
-## Portfolio Notes
+```bash
+curl -X POST http://localhost:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sentence": "今日は雨が降っています。",
+    "jlpt_level": "N5",
+    "focus": "grammar"
+  }'
+```
 
-This project is intended to demonstrate:
+Response fields:
 
-- Practical LLM application design
-- Structured prompt engineering
-- Full-stack AI product implementation
-- API-first backend design
-- Readable documentation and deployment readiness
-- A clear path from prototype to RAG system
+```text
+summary
+natural_translation
+grammar_points
+vocabulary
+nuance
+examples
+practice_questions
+model_used
+source
+```
+
+`source` is `mock` in mock mode and `llm` when a real model API is used.
+
+## Project Structure
+
+```text
+backend/
+  app/
+    main.py
+    schemas.py
+    services/
+      llm_service.py
+      prompt_builder.py
+  requirements.txt
+  .env.example
+
+frontend/
+  src/
+    App.vue
+    main.ts
+    styles.css
+  package.json
+  vite.config.ts
+
+docker-compose.yml
+```
+
+## Docker
+
+```bash
+docker compose up
+```
+
+The frontend runs on `http://localhost:5173` and the backend runs on `http://localhost:8000`.
+
+## Roadmap
+
+- Add PDF upload for Japanese learning materials
+- Add RAG-based grammar retrieval
+- Add source citations for explanations
+- Add saved sentence history
+- Add answer quality evaluation
+
