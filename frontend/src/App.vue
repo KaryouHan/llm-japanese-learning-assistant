@@ -38,6 +38,10 @@ type KnowledgeStatus = {
   indexed_document_count: number;
   indexed_chunk_count: number;
   indexed_sentence_count: number;
+  vector_backend: string;
+  vector_index_exists: boolean;
+  embedding_model: string;
+  reranker_model: string | null;
   index_exists: boolean;
 };
 
@@ -189,7 +193,7 @@ async function ingestKnowledgeBase() {
     }
 
     const payload = await response.json();
-    uploadMessage.value = `Indexed ${payload.document_count} documents and ${payload.chunk_count} chunks.`;
+    uploadMessage.value = `Indexed ${payload.document_count} documents and ${payload.sentence_count} sentence records. Vector index: ${payload.vector_index_built ? payload.vector_backend : "fallback"}.`;
     await refreshKnowledgeStatus();
   } catch (error) {
     relatedError.value =
@@ -298,6 +302,10 @@ async function findRelatedExamples() {
             <p v-if="knowledgeStatus">
               {{ knowledgeStatus.indexed_document_count }} documents /
               {{ knowledgeStatus.indexed_sentence_count }} sentence records indexed
+            </p>
+            <p v-if="knowledgeStatus" class="muted">
+              {{ knowledgeStatus.vector_backend }} vector index:
+              {{ knowledgeStatus.vector_index_exists ? "ready" : "fallback mode" }}
             </p>
             <p v-else>Backend status unavailable.</p>
           </div>

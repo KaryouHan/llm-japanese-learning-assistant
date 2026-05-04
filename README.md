@@ -13,7 +13,7 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 - Analyze Japanese sentences by JLPT level
 - Explain grammar patterns, vocabulary, and nuance
 - Generate example sentences and practice questions
-- Find related N1 examples with a local sentence-level RAG pipeline
+- Find related N1 examples with a local Chroma RAG pipeline
 - Upload local PDFs and build a private local retrieval index
 - Support focus modes: general, grammar, vocabulary, nuance, and exam
 - Use mock mode for local UI testing
@@ -23,7 +23,7 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 
 - Backend: Python, FastAPI, Pydantic, httpx
 - Frontend: Vue 3, TypeScript, Vite
-- Knowledge base: local PDF extraction, sentence-level indexing, and RAG retrieval
+- Knowledge base: Chroma vector store, sentence-transformers embeddings, CrossEncoder reranking
 - Model API: OpenAI-compatible chat completions
 - DevOps: Docker Compose
 
@@ -99,6 +99,20 @@ LLM_REASONING_EFFORT=high
 
 Do not commit `backend/.env`. It is ignored by Git.
 
+### Local RAG
+
+The local knowledge-base search uses Chroma by default:
+
+```env
+RAG_VECTOR_BACKEND=chroma
+RAG_EMBEDDING_MODEL=intfloat/multilingual-e5-small
+RAG_RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+RAG_USE_RERANKER=true
+RAG_RETRIEVAL_K=30
+```
+
+The first indexing run downloads the embedding and reranker models. If those models are not available yet, the app falls back to the lightweight local sentence-vector search instead of failing.
+
 ## API
 
 Analyze a Japanese sentence:
@@ -131,7 +145,7 @@ source
 
 ## Local RAG Knowledge Base
 
-The app can search local JLPT PDFs without committing them to GitHub. During ingestion, PDFs are converted into sentence-level records with local text vectors. At query time, the system extracts grammar patterns, retrieves matching sentence records, reranks the candidates, and returns short examples with source metadata.
+The app can search local JLPT PDFs without committing them to GitHub. During ingestion, PDFs are converted into sentence-level records, embedded with a multilingual sentence-transformers model, and stored in a local Chroma vector database. At query time, the system extracts grammar patterns, retrieves semantic candidates, reranks them with a CrossEncoder, and returns short examples with source metadata.
 
 Put text-based PDFs under:
 
@@ -157,7 +171,7 @@ curl -X POST http://localhost:8000/api/knowledge/related \
   }'
 ```
 
-Local PDFs, uploads, and generated retrieval indexes are ignored by Git:
+Local PDFs, uploads, Chroma data, and generated retrieval indexes are ignored by Git:
 
 ```text
 knowledge_base/raw/
@@ -200,7 +214,7 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 
 ## Roadmap
 
-- Add semantic embeddings with FAISS or Chroma
 - Add LLM-based reranking for difficult grammar variants
+- Add answer synthesis over retrieved examples
 - Add saved sentence history
 - Add answer quality evaluation

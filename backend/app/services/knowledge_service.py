@@ -32,10 +32,25 @@ class KnowledgeService:
         self.uploads_dir = self.knowledge_root / "uploads"
         self.index_dir = self.knowledge_root / "index"
         self.index_file = self.index_dir / "index.json"
+        self.chroma_dir = self.index_dir / "chroma"
+        self.chroma_collection_name = "n1_sentence_examples"
         self.llm_provider = os.getenv("LLM_PROVIDER", "mock")
         self.llm_api_key = os.getenv("LLM_API_KEY", "")
         self.llm_base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
         self.llm_model = os.getenv("LLM_MODEL", "gpt-4.1-mini")
+        self.vector_backend = os.getenv("RAG_VECTOR_BACKEND", "chroma").lower()
+        self.embedding_model_name = os.getenv(
+            "RAG_EMBEDDING_MODEL",
+            "intfloat/multilingual-e5-small",
+        )
+        self.reranker_model_name = os.getenv(
+            "RAG_RERANKER_MODEL",
+            "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        )
+        self.use_reranker = os.getenv("RAG_USE_RERANKER", "true").lower() == "true"
+        self.retrieval_k = int(os.getenv("RAG_RETRIEVAL_K", "30"))
+        self._embedding_model: Any | None = None
+        self._reranker_model: Any | None = None
 
     def status(self) -> KnowledgeStatusResponse:
         index = self._load_index()
@@ -45,6 +60,10 @@ class KnowledgeService:
             indexed_document_count=len(index.get("documents", [])),
             indexed_chunk_count=len(index.get("chunks", [])),
             indexed_sentence_count=len(index.get("sentences", [])),
+            vector_backend=self.vector_backend,
+            vector_index_exists=self._vector_index_exists(),
+            embedding_model=self.embedding_model_name,
+            reranker_model=self.reranker_model_name if self.use_reranker else None,
             index_exists=self.index_file.exists(),
         )
 
@@ -105,10 +124,14 @@ class KnowledgeService:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        vector_index_built = self._build_vector_index(sentences)
 
         return KnowledgeIngestResponse(
             document_count=len(documents),
             chunk_count=len(chunks),
+            sentence_count=len(sentences),
+            vector_backend=self.vector_backend,
+            vector_index_built=vector_index_built,
             skipped_files=skipped_files,
         )
 
@@ -126,7 +149,7 @@ class KnowledgeService:
         patterns = self._extract_query_patterns(request.sentence)
         query_vector = self._vectorize(request.sentence + " " + " ".join(patterns))
 
-        scored: list[tuple[float, dict[str, Any], str | None]] = []
+        candidate_by_id: dict[str, tuple[float, dict[str, Any], str | None, str]] = {}
         for record in records:
             text = record.get("text", "")
             record_vector = Counter(record.get("vector", {}))
@@ -134,19 +157,30 @@ class KnowledgeService:
             matched_pattern = self._best_pattern_match(patterns, text)
             if matched_pattern:
                 score = 5.0 + vector_score
-                scored.append((score, record, matched_pattern))
+                candidate_by_id[record["id"]] = (score, record, matched_pattern, "pattern")
             elif vector_score >= 0.18:
-                scored.append((vector_score, record, None))
+                candidate_by_id[record["id"]] = (vector_score, record, None, "local-vector")
 
+        for semantic_score, record in self._semantic_candidates(request.sentence):
+            matched_pattern = self._best_pattern_match(patterns, record.get("text", ""))
+            score = semantic_score + (5.0 if matched_pattern else 0.0)
+            existing = candidate_by_id.get(record["id"])
+            if not existing or score > existing[0]:
+                method = "chroma-embedding" if self.vector_backend == "chroma" else "semantic"
+                candidate_by_id[record["id"]] = (score, record, matched_pattern, method)
+
+        candidates = list(candidate_by_id.values())
         if patterns:
-            pattern_matches = [item for item in scored if item[2]]
+            pattern_matches = [item for item in candidates if item[2]]
             if pattern_matches:
-                scored = pattern_matches
+                candidates = pattern_matches
+            else:
+                candidates = []
 
-        scored.sort(key=lambda item: item[0], reverse=True)
+        scored = self._rerank_candidates(request.sentence, candidates)
         examples = [
-            self._to_related_example(score, chunk, matched_pattern)
-            for score, chunk, matched_pattern in scored[: request.top_k]
+            self._to_related_example(score, record, matched_pattern, method)
+            for score, record, matched_pattern, method in scored[: request.top_k]
         ]
 
         return RelatedExamplesResponse(
@@ -154,6 +188,224 @@ class KnowledgeService:
             related_examples=examples,
             study_note=self._build_study_note(patterns, examples),
         )
+
+    def _build_vector_index(self, records: list[dict[str, Any]]) -> bool:
+        if self.vector_backend != "chroma" or not records:
+            return False
+
+        try:
+            import chromadb
+            from chromadb.config import Settings
+        except ImportError:
+            return False
+
+        embedding_model = self._load_embedding_model()
+        if not embedding_model:
+            return False
+
+        self.chroma_dir.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(
+            path=str(self.chroma_dir),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        try:
+            client.delete_collection(self.chroma_collection_name)
+        except Exception:
+            pass
+
+        collection = client.get_or_create_collection(
+            name=self.chroma_collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+        batch_size = 64
+        for start in range(0, len(records), batch_size):
+            batch = records[start : start + batch_size]
+            documents = [record["text"] for record in batch]
+            embeddings = self._embed_texts(documents, mode="passage")
+            if not embeddings:
+                return False
+
+            collection.add(
+                ids=[record["id"] for record in batch],
+                documents=documents,
+                metadatas=[self._record_metadata(record) for record in batch],
+                embeddings=embeddings,
+            )
+
+        return True
+
+    def _semantic_candidates(self, sentence: str) -> list[tuple[float, dict[str, Any]]]:
+        if self.vector_backend != "chroma" or not self._vector_index_exists():
+            return []
+
+        try:
+            import chromadb
+            from chromadb.config import Settings
+        except ImportError:
+            return []
+
+        query_embedding = self._embed_texts([sentence], mode="query")
+        if not query_embedding:
+            return []
+
+        try:
+            client = chromadb.PersistentClient(
+                path=str(self.chroma_dir),
+                settings=Settings(anonymized_telemetry=False),
+            )
+            collection = client.get_collection(self.chroma_collection_name)
+            result = collection.query(
+                query_embeddings=query_embedding,
+                n_results=max(self.retrieval_k, 10),
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            return []
+
+        documents = result.get("documents", [[]])[0]
+        metadatas = result.get("metadatas", [[]])[0]
+        distances = result.get("distances", [[]])[0]
+        candidates: list[tuple[float, dict[str, Any]]] = []
+
+        for document, metadata, distance in zip(documents, metadatas, distances, strict=False):
+            score = max(0.0, 1.0 - float(distance))
+            record = self._metadata_to_record(metadata, document)
+            candidates.append((score, record))
+
+        return candidates
+
+    def _rerank_candidates(
+        self,
+        sentence: str,
+        candidates: list[tuple[float, dict[str, Any], str | None, str]],
+    ) -> list[tuple[float, dict[str, Any], str | None, str]]:
+        if not candidates:
+            return []
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        shortlist = candidates[: max(self.retrieval_k, 10)]
+        if not self.use_reranker:
+            return candidates
+
+        reranker = self._load_reranker_model()
+        if not reranker:
+            return candidates
+
+        pairs = [(sentence, item[1].get("text", "")) for item in shortlist]
+        try:
+            rerank_scores = reranker.predict(pairs)
+        except Exception:
+            return candidates
+
+        reranked: list[tuple[float, dict[str, Any], str | None, str]] = []
+        for item, rerank_score in zip(shortlist, rerank_scores, strict=False):
+            base_score, record, matched_pattern, method = item
+            rerank_value = self._sigmoid(float(rerank_score))
+            final_score = base_score + rerank_value * 2.0
+            reranked.append((final_score, record, matched_pattern, f"{method}+reranker"))
+
+        remaining = candidates[len(shortlist) :]
+        reranked.extend(remaining)
+        reranked.sort(key=lambda item: item[0], reverse=True)
+        return reranked
+
+    def _load_embedding_model(self) -> Any | None:
+        if self._embedding_model is not None:
+            return self._embedding_model
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            return None
+
+        try:
+            self._embedding_model = SentenceTransformer(self.embedding_model_name)
+        except Exception:
+            self._embedding_model = None
+
+        return self._embedding_model
+
+    def _load_reranker_model(self) -> Any | None:
+        if self._reranker_model is not None:
+            return self._reranker_model
+
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError:
+            return None
+
+        try:
+            self._reranker_model = CrossEncoder(self.reranker_model_name)
+        except Exception:
+            self._reranker_model = None
+
+        return self._reranker_model
+
+    def _embed_texts(self, texts: list[str], mode: str) -> list[list[float]]:
+        model = self._load_embedding_model()
+        if not model:
+            return []
+
+        prepared_texts = [self._embedding_text(text, mode) for text in texts]
+        try:
+            embeddings = model.encode(
+                prepared_texts,
+                batch_size=32,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+        except Exception:
+            return []
+
+        return embeddings.tolist()
+
+    def _embedding_text(self, text: str, mode: str) -> str:
+        if "e5" not in self.embedding_model_name.lower():
+            return text
+
+        prefix = "query" if mode == "query" else "passage"
+        return f"{prefix}: {text}"
+
+    def _record_metadata(self, record: dict[str, Any]) -> dict[str, str | int | float | bool]:
+        return {
+            "id": record["id"],
+            "source": record.get("source", ""),
+            "year": record.get("year") or "",
+            "month": record.get("month") or "",
+            "level": record.get("level") or "",
+            "section": record.get("section") or "General",
+            "question_id": record.get("question_id") or "",
+            "page": int(record.get("page", 0)),
+            "patterns": "|".join(record.get("patterns", [])),
+        }
+
+    def _metadata_to_record(self, metadata: dict[str, Any], document: str) -> dict[str, Any]:
+        return {
+            "id": metadata.get("id", ""),
+            "source": metadata.get("source", ""),
+            "year": metadata.get("year") or None,
+            "month": metadata.get("month") or None,
+            "level": metadata.get("level") or None,
+            "section": metadata.get("section") or "General",
+            "question_id": metadata.get("question_id") or None,
+            "page": int(metadata.get("page", 0)),
+            "text": document,
+            "patterns": str(metadata.get("patterns", "")).split("|")
+            if metadata.get("patterns")
+            else [],
+        }
+
+    def _vector_index_exists(self) -> bool:
+        return self.vector_backend == "chroma" and self.chroma_dir.exists()
+
+    def _sigmoid(self, value: float) -> float:
+        if value >= 0:
+            z = math.exp(-value)
+            return 1 / (1 + z)
+
+        z = math.exp(value)
+        return z / (1 + z)
 
     def _extract_sentence_records(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -631,15 +883,21 @@ class KnowledgeService:
         return dot / (left_norm * right_norm)
 
     def _to_related_example(
-        self, score: float, chunk: dict[str, Any], matched_pattern: str | None
+        self,
+        score: float,
+        chunk: dict[str, Any],
+        matched_pattern: str | None,
+        retrieval_method: str,
     ) -> RelatedExample:
         excerpt = self._extract_pattern_excerpt(chunk.get("text", ""), matched_pattern)
 
-        why_related = (
-            f"Contains the related grammar pattern {matched_pattern}."
-            if matched_pattern
-            else "Retrieved by local text-vector similarity with the input sentence."
-        )
+        if matched_pattern:
+            why_related = (
+                f"Contains the related grammar pattern {matched_pattern}; "
+                f"retrieved via {retrieval_method}."
+            )
+        else:
+            why_related = f"Retrieved via {retrieval_method} similarity search."
 
         return RelatedExample(
             source=chunk.get("source", ""),

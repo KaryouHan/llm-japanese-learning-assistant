@@ -50,6 +50,10 @@ class KnowledgeStatusResponse(BaseModel):
     indexed_document_count: int
     indexed_chunk_count: int
     indexed_sentence_count: int
+    vector_backend: str
+    vector_index_exists: bool
+    embedding_model: str
+    reranker_model: str | None = None
     index_exists: bool
 
 
@@ -61,6 +65,9 @@ class PdfUploadResponse(BaseModel):
 class KnowledgeIngestResponse(BaseModel):
     document_count: int
     chunk_count: int
+    sentence_count: int
+    vector_backend: str
+    vector_index_built: bool
     skipped_files: list[str]
 
 
