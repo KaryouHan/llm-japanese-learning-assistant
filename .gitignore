@@ -4,9 +4,12 @@ __pycache__/
 venv/
 .env
 
+knowledge_base/raw/
+knowledge_base/index/
+knowledge_base/uploads/
+
 node_modules/
 dist/
 .vite/
 
 .DS_Store
-

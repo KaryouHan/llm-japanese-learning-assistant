@@ -3,3 +3,5 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.4
 python-dotenv==1.2.2
 httpx==0.28.1
+pypdf==6.10.2
+python-multipart==0.0.20

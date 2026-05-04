@@ -43,3 +43,46 @@ class AnalyzeResponse(BaseModel):
     model_used: str
     source: Literal["mock", "llm"]
 
+
+class KnowledgeStatusResponse(BaseModel):
+    raw_pdf_count: int
+    uploaded_pdf_count: int
+    indexed_document_count: int
+    indexed_chunk_count: int
+    index_exists: bool
+
+
+class PdfUploadResponse(BaseModel):
+    filename: str
+    saved_path: str
+
+
+class KnowledgeIngestResponse(BaseModel):
+    document_count: int
+    chunk_count: int
+    skipped_files: list[str]
+
+
+class RelatedExamplesRequest(BaseModel):
+    sentence: str = Field(..., min_length=1, max_length=500)
+    jlpt_level: JLPTLevel = "N1"
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class RelatedExample(BaseModel):
+    source: str
+    year: str | None = None
+    month: str | None = None
+    section: str
+    question_id: str | None = None
+    page: int
+    related_pattern: str | None = None
+    excerpt: str
+    why_related: str
+    score: float
+
+
+class RelatedExamplesResponse(BaseModel):
+    detected_patterns: list[str]
+    related_examples: list[RelatedExample]
+    study_note: str

@@ -13,6 +13,8 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 - Analyze Japanese sentences by JLPT level
 - Explain grammar patterns, vocabulary, and nuance
 - Generate example sentences and practice questions
+- Find related N1 examples from a local PDF knowledge base
+- Upload local PDFs and build a local text-vector index
 - Support focus modes: general, grammar, vocabulary, nuance, and exam
 - Use mock mode for local UI testing
 - Connect to DeepSeek or another OpenAI-compatible chat API
@@ -21,6 +23,7 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 
 - Backend: Python, FastAPI, Pydantic, httpx
 - Frontend: Vue 3, TypeScript, Vite
+- Knowledge base: local PDF extraction and text-vector retrieval
 - Model API: OpenAI-compatible chat completions
 - DevOps: Docker Compose
 
@@ -126,6 +129,42 @@ source
 
 `source` is `mock` in mock mode and `llm` when a real model API is used.
 
+## Local Knowledge Base
+
+The app can search local JLPT PDFs without committing them to GitHub.
+
+Put text-based PDFs under:
+
+```text
+knowledge_base/raw/
+```
+
+Then build the local index from the frontend or with:
+
+```bash
+curl -X POST http://localhost:8000/api/knowledge/ingest
+```
+
+Find related N1 examples:
+
+```bash
+curl -X POST http://localhost:8000/api/knowledge/related \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sentence": "雨が降らないとも限らない。",
+    "jlpt_level": "N1",
+    "top_k": 5
+  }'
+```
+
+Local PDFs, uploads, and generated indexes are ignored by Git:
+
+```text
+knowledge_base/raw/
+knowledge_base/uploads/
+knowledge_base/index/
+```
+
 ## Project Structure
 
 ```text
@@ -135,6 +174,7 @@ backend/
     schemas.py
     services/
       llm_service.py
+      knowledge_service.py
       prompt_builder.py
   requirements.txt
   .env.example
@@ -160,8 +200,7 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 
 ## Roadmap
 
-- Add PDF upload for Japanese learning materials
-- Add RAG-based grammar retrieval
-- Add source citations for explanations
+- Improve grammar-pattern extraction
+- Add semantic embeddings with FAISS or Chroma
 - Add saved sentence history
 - Add answer quality evaluation

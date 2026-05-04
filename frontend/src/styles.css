@@ -16,7 +16,8 @@ body {
 
 button,
 select,
-textarea {
+textarea,
+input {
   font: inherit;
 }
 
@@ -91,7 +92,8 @@ h3 {
 }
 
 textarea,
-select {
+select,
+input[type="file"] {
   width: 100%;
   border: 1px solid #c7d0dc;
   border-radius: 6px;
@@ -109,6 +111,31 @@ textarea {
 select {
   height: 40px;
   padding: 0 10px;
+}
+
+input[type="file"] {
+  padding: 9px;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tab-button,
+.secondary-button {
+  height: 40px;
+  border: 1px solid #c7d0dc;
+  background: #ffffff;
+  color: #17202a;
+}
+
+.tab-button.active {
+  border-color: #166534;
+  background: #e8f3ee;
+  color: #166534;
 }
 
 .controls {
@@ -133,9 +160,35 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
 .error {
   margin: 14px 0 0;
   color: #b42318;
+}
+
+.success {
+  margin: 0 0 16px;
+  color: #166534;
+  font-weight: 700;
+}
+
+.status-panel {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.status-panel p {
+  margin: 6px 0 0;
+  color: #526170;
 }
 
 .mock-warning {
@@ -200,6 +253,43 @@ small {
   margin-top: 4px;
   color: #4b6b7c;
   font-size: 13px;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e8f3ee;
+  color: #166534;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.example-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.example-meta span {
+  color: #526170;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+blockquote {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 3px solid #9fb3c8;
+  background: #f6f7f9;
+  color: #364554;
+  line-height: 1.6;
 }
 
 ul {
