@@ -1,26 +1,75 @@
 # LLM Japanese Learning Assistant
 
-An LLM-powered Japanese learning assistant that explains Japanese sentences with grammar notes, vocabulary, nuance, examples, and practice questions.
+A Japanese learning assistant for sentence analysis and JLPT example retrieval.
 
-The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode without an API key, or connect to any OpenAI-compatible model API such as DeepSeek.
+This project started as an LLM-powered Japanese sentence analyzer, but it is no longer just a model API wrapper. It now includes a local RAG pipeline that lets users build a private JLPT knowledge base from their own PDFs, retrieve related exam examples, and compare grammar usage in real contexts.
+
+The app is designed for Japanese learners who want structured explanations, and for LLM engineering practice around API integration, retrieval, local vector indexing, and reranking.
+
+## Screenshots
+
+### Sentence Analysis
+
+Analyze a Japanese sentence with grammar notes, vocabulary, nuance, examples, and practice questions.
+
+![Sentence Analysis demo](assets/demo1.png)
+
+### JLPT Examples
+
+Search related JLPT examples from a local RAG knowledge base built from user-provided PDFs.
+
+![JLPT Examples demo](assets/demo2.png)
 
 ## Features
 
 - Analyze Japanese sentences by JLPT level
-- Explain grammar patterns, vocabulary, and nuance
+- Explain grammar patterns, vocabulary, nuance, and usage
 - Generate example sentences and practice questions
-- Find related JLPT examples with a local Chroma RAG pipeline
-- Upload local PDFs and build a private local retrieval index
-- Support focus modes: general, grammar, vocabulary, nuance, and exam
-- Use mock mode for local UI testing
+- Upload local JLPT PDFs and build a private knowledge base
+- Retrieve related JLPT examples with a Chroma-based RAG pipeline
+- Use multilingual sentence embeddings for semantic retrieval
+- Use a CrossEncoder reranker to improve retrieved example ranking
+- Keep local PDFs, uploads, and vector indexes out of Git
 - Connect to DeepSeek or another OpenAI-compatible chat API
+- Run in mock mode for UI and API testing without a model key
 
-## Stack
+## Why Local RAG
+
+JLPT past papers and related exam materials are copyrighted. For that reason, this repository does not include any JLPT PDF files or extracted exam content.
+
+Instead, the app provides the tooling for users to build their own local knowledge base:
+
+1. Place text-based JLPT PDFs under `knowledge_base/raw/`, or upload PDFs from the frontend.
+2. Build the local index.
+3. The backend extracts sentence-level records from the PDFs.
+4. Sentence records are embedded with a multilingual embedding model.
+5. Embeddings are stored in a local Chroma vector database.
+6. Queries retrieve semantic candidates and rerank them with a CrossEncoder.
+7. The frontend displays short related examples with source metadata.
+
+This keeps copyrighted materials private while still making the project useful as a real RAG application.
+
+## RAG Pipeline
+
+```text
+User sentence
+  -> grammar pattern extraction
+  -> sentence embedding
+  -> Chroma vector search
+  -> grammar-aware filtering
+  -> CrossEncoder reranking
+  -> related JLPT examples
+```
+
+The retrieval system also has a lightweight fallback. If Chroma or the embedding models are not available yet, the backend can still run with local sentence-vector matching, so the app does not fail during first-time setup.
+
+## Tech Stack
 
 - Backend: Python, FastAPI, Pydantic, httpx
 - Frontend: Vue 3, TypeScript, Vite
-- Knowledge base: Chroma vector store, sentence-transformers embeddings, CrossEncoder reranking
-- Model API: OpenAI-compatible chat completions
+- LLM API: OpenAI-compatible chat completions, tested with DeepSeek
+- RAG: Chroma, sentence-transformers, multilingual embeddings, CrossEncoder reranking
+- PDF processing: pypdf
 - DevOps: Docker Compose
 
 ## Quick Start
@@ -107,9 +156,43 @@ RAG_USE_RERANKER=true
 RAG_RETRIEVAL_K=30
 ```
 
-The first indexing run downloads the embedding and reranker models. If those models are not available yet, the app falls back to the lightweight local sentence-vector search instead of failing.
+The first indexing run downloads the embedding and reranker models. Later runs can reuse the local model cache.
 
-## API
+## Build A Local JLPT Knowledge Base
+
+Put your own text-based JLPT PDFs under:
+
+```text
+knowledge_base/raw/
+```
+
+Then build the local index from the frontend, or use:
+
+```bash
+curl -X POST http://localhost:8000/api/knowledge/ingest
+```
+
+Find related JLPT examples:
+
+```bash
+curl -X POST http://localhost:8000/api/knowledge/related \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sentence": "雨が降らないとも限らない。",
+    "jlpt_level": "N1",
+    "top_k": 5
+  }'
+```
+
+Local PDFs, uploads, Chroma data, and generated retrieval indexes are ignored by Git:
+
+```text
+knowledge_base/raw/
+knowledge_base/uploads/
+knowledge_base/index/
+```
+
+## Sentence Analysis API
 
 Analyze a Japanese sentence:
 
@@ -139,42 +222,6 @@ source
 
 `source` is `mock` in mock mode and `llm` when a real model API is used.
 
-## Local RAG Knowledge Base
-
-The app can search local JLPT PDFs without committing them to GitHub. During ingestion, PDFs are converted into sentence-level records, embedded with a multilingual sentence-transformers model, and stored in a local Chroma vector database. At query time, the system extracts grammar patterns, retrieves semantic candidates, reranks them with a CrossEncoder, and returns short examples with source metadata.
-
-Put text-based PDFs under:
-
-```text
-knowledge_base/raw/
-```
-
-Then build the local index from the frontend or with:
-
-```bash
-curl -X POST http://localhost:8000/api/knowledge/ingest
-```
-
-Find related JLPT examples:
-
-```bash
-curl -X POST http://localhost:8000/api/knowledge/related \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sentence": "雨が降らないとも限らない。",
-    "jlpt_level": "N1",
-    "top_k": 5
-  }'
-```
-
-Local PDFs, uploads, Chroma data, and generated retrieval indexes are ignored by Git:
-
-```text
-knowledge_base/raw/
-knowledge_base/uploads/
-knowledge_base/index/
-```
-
 ## Project Structure
 
 ```text
@@ -197,6 +244,10 @@ frontend/
   package.json
   vite.config.ts
 
+assets/
+  demo1.png
+  demo2.png
+
 docker-compose.yml
 ```
 
@@ -208,9 +259,16 @@ docker compose up
 
 The frontend runs on `http://localhost:5173` and the backend runs on `http://localhost:8000`.
 
+## Notes
+
+- This repository does not provide JLPT PDFs or extracted copyrighted exam content.
+- Users are responsible for preparing their own local PDFs.
+- The local knowledge base is intended for private study and local experimentation.
+- API keys and local knowledge-base files should never be committed.
+
 ## Roadmap
 
-- Add LLM-based reranking for difficult grammar variants
-- Add answer synthesis over retrieved examples
+- Add answer synthesis over retrieved JLPT examples
 - Add saved sentence history
-- Add answer quality evaluation
+- Add source-page preview for retrieved PDF examples
+- Add evaluation scripts for retrieval quality
