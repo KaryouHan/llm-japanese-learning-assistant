@@ -116,10 +116,16 @@ class KnowledgeService:
             chunk_vector = Counter(chunk.get("vector", {}))
             vector_score = self._cosine(query_vector, chunk_vector)
             matched_pattern = self._best_pattern_match(patterns, text)
-            pattern_score = 1.0 if matched_pattern else 0.0
-            score = pattern_score * 3.0 + vector_score
-            if score > 0:
+            if matched_pattern:
+                score = 3.0 + vector_score
                 scored.append((score, chunk, matched_pattern))
+            elif not patterns and vector_score > 0:
+                scored.append((vector_score, chunk, None))
+
+        if patterns:
+            pattern_matches = [item for item in scored if item[2]]
+            if pattern_matches:
+                scored = pattern_matches
 
         scored.sort(key=lambda item: item[0], reverse=True)
         examples = [
@@ -267,6 +273,77 @@ class KnowledgeService:
                 return pattern
         return None
 
+    def _pattern_keyword(self, pattern: str) -> str:
+        return pattern.replace("～", "").replace(" ", "")
+
+    def _find_keyword_span(self, text: str, keyword: str) -> tuple[int, int] | None:
+        if not keyword:
+            return None
+
+        compact_chars: list[str] = []
+        original_indexes: list[int] = []
+        for index, char in enumerate(text):
+            if char.isspace():
+                continue
+            compact_chars.append(char)
+            original_indexes.append(index)
+
+        compact_text = "".join(compact_chars)
+        compact_start = compact_text.find(keyword)
+        if compact_start == -1:
+            return None
+
+        compact_end = compact_start + len(keyword) - 1
+        return original_indexes[compact_start], original_indexes[compact_end] + 1
+
+    def _extract_pattern_excerpt(self, text: str, pattern: str | None) -> str:
+        text = re.sub(r"\s+", " ", text).strip()
+        if not pattern:
+            return self._shorten_excerpt(text, 180)
+
+        span = self._find_keyword_span(text, self._pattern_keyword(pattern))
+        if not span:
+            return self._shorten_excerpt(text, 180)
+
+        start, end = span
+        left_boundaries = [text.rfind(mark, 0, start) for mark in "。！？?"]
+        left = max(left_boundaries)
+        left = 0 if left == -1 else left + 1
+
+        right_candidates = [
+            index for mark in "。！？?" if (index := text.find(mark, end)) != -1
+        ]
+        right = min(right_candidates) + 1 if right_candidates else len(text)
+
+        excerpt = text[left:right].strip()
+        return self._shorten_excerpt_around_span(excerpt, pattern, max_chars=180)
+
+    def _shorten_excerpt(self, text: str, max_chars: int) -> str:
+        text = text.strip()
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max_chars].rstrip()}..."
+
+    def _shorten_excerpt_around_span(
+        self, text: str, pattern: str | None, max_chars: int
+    ) -> str:
+        if len(text) <= max_chars or not pattern:
+            return text
+
+        span = self._find_keyword_span(text, self._pattern_keyword(pattern))
+        if not span:
+            return self._shorten_excerpt(text, max_chars)
+
+        start, end = span
+        left = max(0, start - 70)
+        right = min(len(text), end + 90)
+        excerpt = text[left:right].strip()
+        if left > 0:
+            excerpt = f"...{excerpt}"
+        if right < len(text):
+            excerpt = f"{excerpt}..."
+        return excerpt
+
     def _vectorize(self, text: str) -> Counter[str]:
         normalized = re.sub(r"\s+", "", text)
         tokens: list[str] = re.findall(r"[A-Za-z0-9]+", normalized)
@@ -290,12 +367,10 @@ class KnowledgeService:
     def _to_related_example(
         self, score: float, chunk: dict[str, Any], matched_pattern: str | None
     ) -> RelatedExample:
-        excerpt = chunk.get("text", "")
-        if len(excerpt) > 260:
-            excerpt = f"{excerpt[:260].strip()}..."
+        excerpt = self._extract_pattern_excerpt(chunk.get("text", ""), matched_pattern)
 
         why_related = (
-            f"Matches the detected grammar pattern {matched_pattern}."
+            f"Contains the related grammar pattern {matched_pattern}."
             if matched_pattern
             else "Retrieved by local text-vector similarity with the input sentence."
         )
