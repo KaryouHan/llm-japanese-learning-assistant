@@ -4,6 +4,10 @@ An LLM-powered Japanese learning assistant that explains Japanese sentences with
 
 The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode without an API key, or connect to any OpenAI-compatible model API such as DeepSeek.
 
+## Demo
+
+![LLM Japanese Learning Assistant demo](assets/demo.png)
+
 ## Features
 
 - Analyze Japanese sentences by JLPT level
@@ -161,4 +165,3 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 - Add source citations for explanations
 - Add saved sentence history
 - Add answer quality evaluation
-
