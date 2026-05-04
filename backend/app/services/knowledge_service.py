@@ -146,6 +146,13 @@ class KnowledgeService:
             )
 
         records = index.get("sentences") or self._records_from_legacy_chunks(chunks)
+        level_records = [
+            record for record in records if record.get("level") == request.jlpt_level
+        ]
+        use_level_filter = bool(level_records)
+        if use_level_filter:
+            records = level_records
+
         patterns = self._extract_query_patterns(request.sentence)
         query_vector = self._vectorize(request.sentence + " " + " ".join(patterns))
 
@@ -162,6 +169,8 @@ class KnowledgeService:
                 candidate_by_id[record["id"]] = (vector_score, record, None, "local-vector")
 
         for semantic_score, record in self._semantic_candidates(request.sentence):
+            if use_level_filter and record.get("level") != request.jlpt_level:
+                continue
             matched_pattern = self._best_pattern_match(patterns, record.get("text", ""))
             score = semantic_score + (5.0 if matched_pattern else 0.0)
             existing = candidate_by_id.get(record["id"])
@@ -545,10 +554,11 @@ class KnowledgeService:
     def _parse_pdf_metadata(self, filename: str) -> dict[str, str | None]:
         compact = re.sub(r"[^0-9A-Za-z]", "", filename)
         match = re.search(r"(20\d{2})(07|12)", compact)
+        level_match = re.search(r"N[1-5]", filename.upper())
         return {
             "year": match.group(1) if match else None,
             "month": match.group(2) if match else None,
-            "level": "N1" if "N1" in filename.upper() else None,
+            "level": level_match.group(0) if level_match else None,
         }
 
     def _detect_section(self, text: str) -> str:
@@ -914,12 +924,12 @@ class KnowledgeService:
 
     def _build_study_note(self, patterns: list[str], examples: list[RelatedExample]) -> str:
         if not examples:
-            return "No related examples found. Try ingesting more N1 PDFs or using a sentence with a clearer grammar pattern."
+            return "No related examples found. Try ingesting more JLPT PDFs or using a sentence with a clearer grammar pattern."
         if patterns:
             if "～ないとも限らない" in patterns and "～とは限らない" in patterns:
                 return "Compare ～ないとも限らない with ～とは限らない. Both express that something cannot be ruled out, but ～ないとも限らない sounds more cautious and possibility-focused."
-            return f"Review the detected pattern {', '.join(patterns)} and compare how it appears across similar N1 questions."
-        return "No explicit grammar pattern was detected, so results are based on local similarity. Try a sentence containing a clear N1 grammar expression for better matches."
+            return f"Review the detected pattern {', '.join(patterns)} and compare how it appears across similar JLPT questions."
+        return "No explicit grammar pattern was detected, so results are based on local similarity. Try a sentence containing a clear JLPT grammar expression for better matches."
 
     def _load_index(self) -> dict[str, Any]:
         if not self.index_file.exists():

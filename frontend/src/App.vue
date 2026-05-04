@@ -76,6 +76,7 @@ const errorMessage = ref("");
 const result = ref<AnalyzeResponse | null>(null);
 
 const relatedSentence = ref("雨が降らないとも限らない。");
+const relatedJlptLevel = ref("N1");
 const relatedTopK = ref(5);
 const relatedLoading = ref(false);
 const relatedError = ref("");
@@ -215,7 +216,7 @@ async function findRelatedExamples() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sentence: relatedSentence.value,
-        jlpt_level: "N1",
+        jlpt_level: relatedJlptLevel.value,
         top_k: relatedTopK.value,
       }),
     });
@@ -255,7 +256,7 @@ async function findRelatedExamples() {
             :class="{ active: activeTab === 'related' }"
             @click="activeTab = 'related'"
           >
-            Related N1 Examples
+            JLPT Examples
           </button>
         </div>
 
@@ -340,7 +341,18 @@ async function findRelatedExamples() {
           </label>
 
           <label class="field">
-            <span>Related examples</span>
+            <span>Target level</span>
+            <select v-model="relatedJlptLevel">
+              <option>N5</option>
+              <option>N4</option>
+              <option>N3</option>
+              <option>N2</option>
+              <option>N1</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Examples</span>
             <select v-model="relatedTopK">
               <option :value="3">Top 3</option>
               <option :value="5">Top 5</option>
@@ -349,7 +361,7 @@ async function findRelatedExamples() {
           </label>
 
           <button :disabled="!canFindRelated" @click="findRelatedExamples">
-            {{ relatedLoading ? "Searching..." : "Find related N1 examples" }}
+            {{ relatedLoading ? "Searching..." : "Find JLPT examples" }}
           </button>
 
           <p v-if="relatedError" class="error">{{ relatedError }}</p>
@@ -436,7 +448,7 @@ async function findRelatedExamples() {
           <template v-if="relatedResult">
             <div class="result-header">
               <div>
-                <p class="eyebrow">Related N1 Examples</p>
+                <p class="eyebrow">JLPT Examples</p>
                 <h2>Similar grammar and exam contexts</h2>
               </div>
               <span class="pill">{{ relatedResult.related_examples.length }} results</span>
@@ -457,7 +469,7 @@ async function findRelatedExamples() {
             </section>
 
             <section>
-              <h3>Related N1 examples</h3>
+              <h3>Related JLPT examples</h3>
               <article
                 v-for="(example, index) in relatedResult.related_examples"
                 :key="`${example.source}-${example.page}-${index}`"
@@ -488,10 +500,10 @@ async function findRelatedExamples() {
           </template>
 
           <div v-else class="empty-state">
-            <h2>Build a local N1 knowledge base</h2>
+            <h2>Build a local JLPT knowledge base</h2>
             <p>
               Upload text-based JLPT PDFs, build the local index, then search for
-              related N1 examples by sentence.
+              related JLPT examples by sentence.
             </p>
           </div>
         </template>

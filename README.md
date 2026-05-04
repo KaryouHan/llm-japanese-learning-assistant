@@ -13,7 +13,7 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 - Analyze Japanese sentences by JLPT level
 - Explain grammar patterns, vocabulary, and nuance
 - Generate example sentences and practice questions
-- Find related N1 examples with a local Chroma RAG pipeline
+- Find related JLPT examples with a local Chroma RAG pipeline
 - Upload local PDFs and build a private local retrieval index
 - Support focus modes: general, grammar, vocabulary, nuance, and exam
 - Use mock mode for local UI testing
@@ -159,7 +159,7 @@ Then build the local index from the frontend or with:
 curl -X POST http://localhost:8000/api/knowledge/ingest
 ```
 
-Find related N1 examples:
+Find related JLPT examples:
 
 ```bash
 curl -X POST http://localhost:8000/api/knowledge/related \
