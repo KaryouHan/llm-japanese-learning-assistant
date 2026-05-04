@@ -37,6 +37,7 @@ type KnowledgeStatus = {
   uploaded_pdf_count: number;
   indexed_document_count: number;
   indexed_chunk_count: number;
+  indexed_sentence_count: number;
   index_exists: boolean;
 };
 
@@ -296,7 +297,7 @@ async function findRelatedExamples() {
             <strong>Local knowledge base</strong>
             <p v-if="knowledgeStatus">
               {{ knowledgeStatus.indexed_document_count }} documents /
-              {{ knowledgeStatus.indexed_chunk_count }} chunks indexed
+              {{ knowledgeStatus.indexed_sentence_count }} sentence records indexed
             </p>
             <p v-else>Backend status unavailable.</p>
           </div>

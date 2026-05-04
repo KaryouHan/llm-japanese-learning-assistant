@@ -49,6 +49,7 @@ class KnowledgeStatusResponse(BaseModel):
     uploaded_pdf_count: int
     indexed_document_count: int
     indexed_chunk_count: int
+    indexed_sentence_count: int
     index_exists: bool
 
 

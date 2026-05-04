@@ -1,11 +1,14 @@
 import json
 import math
+import os
 import re
 import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import httpx
+from dotenv import load_dotenv
 from fastapi import UploadFile
 from pypdf import PdfReader
 
@@ -18,6 +21,8 @@ from app.schemas import (
     RelatedExamplesResponse,
 )
 
+load_dotenv()
+
 
 class KnowledgeService:
     def __init__(self) -> None:
@@ -27,6 +32,10 @@ class KnowledgeService:
         self.uploads_dir = self.knowledge_root / "uploads"
         self.index_dir = self.knowledge_root / "index"
         self.index_file = self.index_dir / "index.json"
+        self.llm_provider = os.getenv("LLM_PROVIDER", "mock")
+        self.llm_api_key = os.getenv("LLM_API_KEY", "")
+        self.llm_base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+        self.llm_model = os.getenv("LLM_MODEL", "gpt-4.1-mini")
 
     def status(self) -> KnowledgeStatusResponse:
         index = self._load_index()
@@ -35,6 +44,7 @@ class KnowledgeService:
             uploaded_pdf_count=len(list(self.uploads_dir.glob("*.pdf"))),
             indexed_document_count=len(index.get("documents", [])),
             indexed_chunk_count=len(index.get("chunks", [])),
+            indexed_sentence_count=len(index.get("sentences", [])),
             index_exists=self.index_file.exists(),
         )
 
@@ -63,11 +73,13 @@ class KnowledgeService:
         pdf_paths = sorted(pdf_by_name.values())
         documents: list[dict[str, Any]] = []
         chunks: list[dict[str, Any]] = []
+        sentences: list[dict[str, Any]] = []
         skipped_files: list[str] = []
 
         for pdf_path in pdf_paths:
             try:
                 document_chunks = self._extract_pdf_chunks(pdf_path)
+                document_sentences = self._extract_sentence_records(document_chunks)
             except Exception as exc:
                 skipped_files.append(f"{pdf_path.name}: {exc}")
                 continue
@@ -77,14 +89,17 @@ class KnowledgeService:
                     "source": pdf_path.name,
                     "path": str(pdf_path),
                     "chunk_count": len(document_chunks),
+                    "sentence_count": len(document_sentences),
                 }
             )
             chunks.extend(document_chunks)
+            sentences.extend(document_sentences)
 
         payload = {
-            "version": 1,
+            "version": 2,
             "documents": documents,
             "chunks": chunks,
+            "sentences": sentences,
         }
         self.index_file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -107,20 +122,21 @@ class KnowledgeService:
                 study_note="No indexed PDFs found. Upload PDFs or place them under knowledge_base/raw, then run ingestion.",
             )
 
-        patterns = self._detect_patterns(request.sentence)
+        records = index.get("sentences") or self._records_from_legacy_chunks(chunks)
+        patterns = self._extract_query_patterns(request.sentence)
         query_vector = self._vectorize(request.sentence + " " + " ".join(patterns))
 
         scored: list[tuple[float, dict[str, Any], str | None]] = []
-        for chunk in chunks:
-            text = chunk.get("text", "")
-            chunk_vector = Counter(chunk.get("vector", {}))
-            vector_score = self._cosine(query_vector, chunk_vector)
+        for record in records:
+            text = record.get("text", "")
+            record_vector = Counter(record.get("vector", {}))
+            vector_score = self._cosine(query_vector, record_vector)
             matched_pattern = self._best_pattern_match(patterns, text)
             if matched_pattern:
-                score = 3.0 + vector_score
-                scored.append((score, chunk, matched_pattern))
-            elif not patterns and vector_score > 0:
-                scored.append((vector_score, chunk, None))
+                score = 5.0 + vector_score
+                scored.append((score, record, matched_pattern))
+            elif vector_score >= 0.18:
+                scored.append((vector_score, record, None))
 
         if patterns:
             pattern_matches = [item for item in scored if item[2]]
@@ -138,6 +154,51 @@ class KnowledgeService:
             related_examples=examples,
             study_note=self._build_study_note(patterns, examples),
         )
+
+    def _extract_sentence_records(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        seen: set[tuple[str, int, str]] = set()
+
+        for chunk in chunks:
+            for sentence_index, sentence in enumerate(self._split_sentences(chunk["text"]), start=1):
+                if len(sentence) < 10:
+                    continue
+
+                key = (chunk["source"], int(chunk["page"]), sentence)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                record = {
+                    "id": f"{chunk['id']}-s{sentence_index}",
+                    "source": chunk["source"],
+                    "year": chunk["year"],
+                    "month": chunk["month"],
+                    "level": chunk["level"],
+                    "section": chunk["section"],
+                    "question_id": chunk["question_id"],
+                    "page": chunk["page"],
+                    "text": sentence,
+                    "patterns": self._detect_patterns(sentence),
+                    "vector": dict(self._vectorize(sentence)),
+                }
+                records.append(record)
+
+        return records
+
+    def _records_from_legacy_chunks(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for chunk in chunks:
+            for sentence_index, sentence in enumerate(self._split_sentences(chunk.get("text", "")), start=1):
+                legacy_record = {
+                    **chunk,
+                    "id": f"{chunk.get('id', 'chunk')}-legacy-s{sentence_index}",
+                    "text": sentence,
+                    "patterns": self._detect_patterns(sentence),
+                    "vector": dict(self._vectorize(sentence)),
+                }
+                records.append(legacy_record)
+        return records
 
     def _extract_pdf_chunks(self, pdf_path: Path) -> list[dict[str, Any]]:
         reader = PdfReader(str(pdf_path))
@@ -168,6 +229,26 @@ class KnowledgeService:
                 chunks.append(chunk)
 
         return chunks
+
+    def _split_sentences(self, text: str) -> list[str]:
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return []
+
+        sentences = re.split(r"(?<=[。！？?])\s+", text)
+        refined: list[str] = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if len(sentence) <= 220:
+                refined.append(sentence)
+                continue
+
+            pieces = re.split(r"(?<=[）)])\s+|(?<=\))\s+|(?<=、)\s+", sentence)
+            refined.extend(piece.strip() for piece in pieces if len(piece.strip()) >= 10)
+
+        return refined
 
     def _split_text(self, text: str, max_chars: int = 900, overlap: int = 120) -> list[str]:
         if len(text) <= max_chars:
@@ -239,6 +320,88 @@ class KnowledgeService:
         table = str.maketrans("０１２３４５６７８９", "0123456789")
         return value.translate(table)
 
+    def _extract_query_patterns(self, sentence: str) -> list[str]:
+        local_patterns = self._detect_patterns(sentence)
+        llm_patterns = self._extract_patterns_with_llm(sentence)
+        return list(dict.fromkeys([*local_patterns, *llm_patterns]))
+
+    def _extract_patterns_with_llm(self, sentence: str) -> list[str]:
+        if self.llm_provider != "openai_compatible" or not self.llm_api_key:
+            return []
+
+        url = f"{self.llm_base_url.rstrip('/')}/chat/completions"
+        prompt = (
+            "Extract Japanese grammar patterns from the learner sentence.\n"
+            "Return strict JSON only: {\"patterns\":[\"～pattern\"]}.\n"
+            "Rules:\n"
+            "- Extract only reusable JLPT-style grammar expressions, not vocabulary.\n"
+            "- Normalize with the leading ～, for example ～とは限らない.\n"
+            "- If a pattern has a close exam variant, include both the exact pattern and variant.\n"
+            "- Return at most 5 patterns.\n\n"
+            f"Sentence: {sentence}"
+        )
+        body: dict[str, Any] = {
+            "model": self.llm_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a precise Japanese grammar pattern extractor. Return JSON only.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+        }
+
+        try:
+            with httpx.Client(timeout=20) as client:
+                response = client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+                response.raise_for_status()
+                raw = response.json()
+        except Exception:
+            return []
+
+        content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            parsed = json.loads(self._strip_json_fence(content))
+        except json.JSONDecodeError:
+            return []
+
+        patterns = parsed.get("patterns", [])
+        if not isinstance(patterns, list):
+            return []
+
+        normalized: list[str] = []
+        for pattern in patterns:
+            if not isinstance(pattern, str):
+                continue
+            pattern = pattern.strip()
+            if not pattern:
+                continue
+            if not pattern.startswith("～"):
+                pattern = f"～{pattern}"
+            normalized.append(pattern)
+
+        return normalized[:5]
+
+    def _strip_json_fence(self, content: str) -> str:
+        text = content.strip()
+        if text.startswith("```json"):
+            text = text.removeprefix("```json").strip()
+        elif text.startswith("```"):
+            text = text.removeprefix("```").strip()
+
+        if text.endswith("```"):
+            text = text.removesuffix("```").strip()
+
+        return text
+
     def _detect_patterns(self, sentence: str) -> list[str]:
         patterns: list[str] = []
         if "ないとも限らない" in sentence:
@@ -247,20 +410,70 @@ class KnowledgeService:
         rules = [
             ("ないとも限らない", "～ないとも限らない"),
             ("とは限らない", "～とは限らない"),
+            ("とはいえ", "～とはいえ"),
+            ("といっても", "～といっても"),
+            ("からといって", "～からといって"),
             ("に越したことはない", "～に越したことはない"),
             ("を余儀なくされ", "～を余儀なくされる"),
+            ("余儀なくされた", "～を余儀なくされる"),
             ("ざるを得ない", "～ざるを得ない"),
             ("ずにはいられない", "～ずにはいられない"),
             ("にほかならない", "～にほかならない"),
             ("までもない", "～までもない"),
             ("わけではない", "～わけではない"),
             ("わけにはいかない", "～わけにはいかない"),
+            ("ないわけにはいかない", "～ないわけにはいかない"),
             ("にしては", "～にしては"),
             ("としても", "～としても"),
+            ("にしても", "～にしても"),
             ("に伴って", "～に伴って"),
             ("につれて", "～につれて"),
             ("に応じて", "～に応じて"),
             ("に基づいて", "～に基づいて"),
+            ("をもとに", "～をもとに"),
+            ("に即して", "～に即して"),
+            ("に沿って", "～に沿って"),
+            ("に反して", "～に反して"),
+            ("にかかわらず", "～にかかわらず"),
+            ("にもかかわらず", "～にもかかわらず"),
+            ("ものの", "～ものの"),
+            ("ものなら", "～ものなら"),
+            ("ものだから", "～ものだから"),
+            ("ものを", "～ものを"),
+            ("ことなく", "～ことなく"),
+            ("ことから", "～ことから"),
+            ("ことだし", "～ことだし"),
+            ("というもの", "～というもの"),
+            ("というより", "～というより"),
+            ("というか", "～というか"),
+            ("とともに", "～とともに"),
+            ("ともなると", "～ともなると"),
+            ("となると", "～となると"),
+            ("ないことには", "～ないことには"),
+            ("かねない", "～かねない"),
+            ("かねる", "～かねる"),
+            ("に堪えない", "～に堪えない"),
+            ("に足る", "～に足る"),
+            ("に至る", "～に至る"),
+            ("に至って", "～に至って"),
+            ("に際して", "～に際して"),
+            ("にあたって", "～にあたって"),
+            ("をめぐって", "～をめぐって"),
+            ("を問わず", "～を問わず"),
+            ("を通じて", "～を通じて"),
+            ("を通して", "～を通して"),
+            ("を皮切りに", "～を皮切りに"),
+            ("にとどまらず", "～にとどまらず"),
+            ("のみならず", "～のみならず"),
+            ("ばかりか", "～ばかりか"),
+            ("だけあって", "～だけあって"),
+            ("だけに", "～だけに"),
+            ("に限って", "～に限って"),
+            ("に限り", "～に限り"),
+            ("に限らず", "～に限らず"),
+            ("次第だ", "～次第だ"),
+            ("次第で", "～次第で"),
+            ("次第では", "～次第では"),
         ]
         patterns.extend(label for marker, label in rules if marker in sentence)
         return list(dict.fromkeys(patterns))
@@ -268,13 +481,30 @@ class KnowledgeService:
     def _best_pattern_match(self, patterns: list[str], text: str) -> str | None:
         normalized_text = text.replace(" ", "")
         for pattern in patterns:
-            keyword = pattern.replace("～", "").replace(" ", "")
-            if keyword and keyword in normalized_text:
+            if any(keyword and keyword in normalized_text for keyword in self._pattern_keywords(pattern)):
                 return pattern
         return None
 
     def _pattern_keyword(self, pattern: str) -> str:
         return pattern.replace("～", "").replace(" ", "")
+
+    def _pattern_keywords(self, pattern: str) -> list[str]:
+        keyword = self._pattern_keyword(pattern)
+        aliases = {
+            "を余儀なくされる": ["を余儀なくされ", "余儀なくされ"],
+            "ざるを得ない": ["ざるを得ない", "ざるをえない"],
+            "ずにはいられない": ["ずにはいられない", "ずにいられない"],
+            "にほかならない": ["にほかならない", "に他ならない"],
+            "に基づいて": ["に基づいて", "に基づき", "に基づく"],
+            "に伴って": ["に伴って", "に伴い", "に伴う"],
+            "につれて": ["につれて", "につれ"],
+            "に応じて": ["に応じて", "に応じた", "に応じ"],
+            "にかかわらず": ["にかかわらず", "に関わらず"],
+            "にもかかわらず": ["にもかかわらず", "にも関わらず"],
+            "に至る": ["に至る", "に至った", "に至り"],
+            "に限らず": ["に限らず", "に限らない"],
+        }
+        return list(dict.fromkeys([keyword, *aliases.get(keyword, [])]))
 
     def _find_keyword_span(self, text: str, keyword: str) -> tuple[int, int] | None:
         if not keyword:
@@ -301,11 +531,15 @@ class KnowledgeService:
         if not pattern:
             return self._shorten_excerpt(text, 180)
 
-        span = self._find_keyword_span(text, self._pattern_keyword(pattern))
+        span = self._find_first_keyword_span(text, pattern)
         if not span:
             return self._shorten_excerpt(text, 180)
 
         start, end = span
+        option_excerpt = self._extract_option_excerpt(text, start)
+        if option_excerpt:
+            return self._shorten_excerpt_around_span(option_excerpt, pattern, max_chars=120)
+
         left_boundaries = [text.rfind(mark, 0, start) for mark in "。！？?"]
         left = max(left_boundaries)
         left = 0 if left == -1 else left + 1
@@ -317,6 +551,31 @@ class KnowledgeService:
 
         excerpt = text[left:right].strip()
         return self._shorten_excerpt_around_span(excerpt, pattern, max_chars=180)
+
+    def _extract_option_excerpt(self, text: str, keyword_start: int) -> str | None:
+        marker_matches = list(re.finditer(r"(?<![0-9０-９])([1-4１-４])(?=\s|[ぁ-んァ-ン一-龥])", text))
+        if len(marker_matches) < 2:
+            return None
+
+        current_marker = None
+        next_marker = None
+        for index, marker in enumerate(marker_matches):
+            if marker.start() <= keyword_start:
+                current_marker = marker
+                next_marker = marker_matches[index + 1] if index + 1 < len(marker_matches) else None
+
+        if not current_marker:
+            return None
+
+        option_start = current_marker.start()
+        option_end = next_marker.start() if next_marker else len(text)
+        if not (option_start <= keyword_start <= option_end):
+            return None
+
+        option = text[option_start:option_end].strip()
+        if len(option) > 160:
+            return None
+        return option
 
     def _shorten_excerpt(self, text: str, max_chars: int) -> str:
         text = text.strip()
@@ -330,7 +589,7 @@ class KnowledgeService:
         if len(text) <= max_chars or not pattern:
             return text
 
-        span = self._find_keyword_span(text, self._pattern_keyword(pattern))
+        span = self._find_first_keyword_span(text, pattern)
         if not span:
             return self._shorten_excerpt(text, max_chars)
 
@@ -343,6 +602,13 @@ class KnowledgeService:
         if right < len(text):
             excerpt = f"{excerpt}..."
         return excerpt
+
+    def _find_first_keyword_span(self, text: str, pattern: str) -> tuple[int, int] | None:
+        for keyword in self._pattern_keywords(pattern):
+            span = self._find_keyword_span(text, keyword)
+            if span:
+                return span
+        return None
 
     def _vectorize(self, text: str) -> Counter[str]:
         normalized = re.sub(r"\s+", "", text)

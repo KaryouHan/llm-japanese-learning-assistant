@@ -13,8 +13,8 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 - Analyze Japanese sentences by JLPT level
 - Explain grammar patterns, vocabulary, and nuance
 - Generate example sentences and practice questions
-- Find related N1 examples from a local PDF knowledge base
-- Upload local PDFs and build a local text-vector index
+- Find related N1 examples with a local sentence-level RAG pipeline
+- Upload local PDFs and build a private local retrieval index
 - Support focus modes: general, grammar, vocabulary, nuance, and exam
 - Use mock mode for local UI testing
 - Connect to DeepSeek or another OpenAI-compatible chat API
@@ -23,7 +23,7 @@ The app includes a FastAPI backend and a Vue 3 frontend. It can run in mock mode
 
 - Backend: Python, FastAPI, Pydantic, httpx
 - Frontend: Vue 3, TypeScript, Vite
-- Knowledge base: local PDF extraction and text-vector retrieval
+- Knowledge base: local PDF extraction, sentence-level indexing, and RAG retrieval
 - Model API: OpenAI-compatible chat completions
 - DevOps: Docker Compose
 
@@ -129,9 +129,9 @@ source
 
 `source` is `mock` in mock mode and `llm` when a real model API is used.
 
-## Local Knowledge Base
+## Local RAG Knowledge Base
 
-The app can search local JLPT PDFs without committing them to GitHub.
+The app can search local JLPT PDFs without committing them to GitHub. During ingestion, PDFs are converted into sentence-level records with local text vectors. At query time, the system extracts grammar patterns, retrieves matching sentence records, reranks the candidates, and returns short examples with source metadata.
 
 Put text-based PDFs under:
 
@@ -157,7 +157,7 @@ curl -X POST http://localhost:8000/api/knowledge/related \
   }'
 ```
 
-Local PDFs, uploads, and generated indexes are ignored by Git:
+Local PDFs, uploads, and generated retrieval indexes are ignored by Git:
 
 ```text
 knowledge_base/raw/
@@ -200,7 +200,7 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 
 ## Roadmap
 
-- Improve grammar-pattern extraction
 - Add semantic embeddings with FAISS or Chroma
+- Add LLM-based reranking for difficult grammar variants
 - Add saved sentence history
 - Add answer quality evaluation
