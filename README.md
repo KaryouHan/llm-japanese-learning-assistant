@@ -142,7 +142,7 @@ LLM_THINKING_TYPE=enabled
 LLM_REASONING_EFFORT=high
 ```
 
-Do not commit `backend/.env`. It is ignored by Git.
+Runtime configuration is loaded from `backend/.env`.
 
 ### Local RAG
 
@@ -264,7 +264,7 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 - This repository does not provide JLPT PDFs or extracted copyrighted exam content.
 - Users are responsible for preparing their own local PDFs.
 - The local knowledge base is intended for private study and local experimentation.
-- API keys and local knowledge-base files should never be committed.
+- Local API configuration and knowledge-base files are excluded from the repository.
 
 ## Roadmap
 
